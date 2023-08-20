@@ -113,7 +113,7 @@
 //!
 //!       let list = app.state::<List>();
 //!       let list = list.0.lock().unwrap();
-//!         
+//!
 //!       let items = list.iter().cloned().collect::<Vec<_>>();
 //!
 //!       Ok(items)
@@ -215,6 +215,7 @@ pub use async_graphql;
 use async_graphql::{
   futures_util::StreamExt, BatchRequest, ObjectType, Request, Schema, SubscriptionType,
 };
+use axum::{Router, Server};
 use serde::Deserialize;
 #[cfg(feature = "graphiql")]
 use std::net::SocketAddr;
@@ -373,7 +374,6 @@ where
 /// tauri::Builder::default()
 ///     .plugin(tauri_plugin_graphql::init_with_graphiql(schema, ([127,0,0,1], 8080)));
 /// ```
-#[cfg(feature = "graphiql")]
 pub fn init_with_graphiql<R, Query, Mutation, Subscription>(
   schema: Schema<Query, Mutation, Subscription>,
   graphiql_addr: impl Into<SocketAddr>,
@@ -385,54 +385,28 @@ where
   Subscription: SubscriptionType + 'static,
 {
   use async_graphql::http::GraphiQLSource;
-  use async_graphql_warp::{GraphQLBadRequest, GraphQLResponse};
-  use http::StatusCode;
-  use std::convert::Infallible;
-  use warp::{http::Response as HttpResponse, Filter, Rejection};
+  use async_graphql_axum::GraphQL;
+  use axum::{
+    response::{self, IntoResponse},
+    routing::get,
+  };
 
+  async fn graphiql() -> impl IntoResponse {
+    response::Html(GraphiQLSource::build().endpoint("/").finish())
+  }
   let graphiql_addr: SocketAddr = graphiql_addr.into();
 
   plugin::Builder::new("graphql")
     .invoke_handler(invoke_handler(schema.clone()))
     .setup(move |_| {
-      let graphql_post = async_graphql_warp::graphql(schema).and_then(
-        |(schema, request): (
-          Schema<Query, Mutation, Subscription>,
-          async_graphql::Request,
-        )| async move {
-          Ok::<_, Infallible>(GraphQLResponse::from(schema.execute(request).await))
-        },
-      );
-
-      let graphiql = warp::path::end().and(warp::get()).map(move || {
-        HttpResponse::builder()
-          .header("content-type", "text/html")
-          .body(
-            GraphiQLSource::build()
-              .endpoint(&graphiql_addr.to_string())
-              .finish(),
-          )
+      tauri::async_runtime::spawn(async move {
+        let app = Router::new().route("/", get(graphiql).post_service(GraphQL::new(schema)));
+        Server::bind(&graphiql_addr)
+          .serve(app.into_make_service())
+          .await
+          .unwrap()
       });
-
-      let routes = graphiql
-        .or(graphql_post)
-        .recover(|err: Rejection| async move {
-          if let Some(GraphQLBadRequest(err)) = err.find() {
-            return Ok::<_, Infallible>(warp::reply::with_status(
-              err.to_string(),
-              StatusCode::BAD_REQUEST,
-            ));
-          }
-
-          Ok(warp::reply::with_status(
-            "INTERNAL_SERVER_ERROR".to_string(),
-            StatusCode::INTERNAL_SERVER_ERROR,
-          ))
-        });
-
       println!("GraphiQL IDE: {}", graphiql_addr);
-
-      tauri::async_runtime::spawn(warp::serve(routes).run(graphiql_addr));
 
       Ok(())
     })
