@@ -218,7 +218,6 @@ use async_graphql::{
 use axum::{Router, Server};
 use serde::Deserialize;
 #[cfg(feature = "graphiql")]
-use std::net::SocketAddr;
 use tauri::{
   plugin::{self, TauriPlugin},
   Invoke, InvokeError, Manager, Runtime,
@@ -374,9 +373,10 @@ where
 /// tauri::Builder::default()
 ///     .plugin(tauri_plugin_graphql::init_with_graphiql(schema, ([127,0,0,1], 8080)));
 /// ```
+#[cfg(feature = "graphiql")]
 pub fn init_with_graphiql<R, Query, Mutation, Subscription>(
   schema: Schema<Query, Mutation, Subscription>,
-  graphiql_addr: impl Into<SocketAddr>,
+  graphiql_addr: impl Into<std::net::SocketAddr>,
 ) -> TauriPlugin<R>
 where
   R: Runtime,
@@ -384,6 +384,8 @@ where
   Mutation: ObjectType + 'static,
   Subscription: SubscriptionType + 'static,
 {
+  use std::net::SocketAddr;
+
   use async_graphql::http::GraphiQLSource;
   use async_graphql_axum::GraphQL;
   use axum::{
